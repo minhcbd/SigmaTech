@@ -1,0 +1,161 @@
+-- ========== Load Rayfield ==========
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+    Name = "Game Explorer Tool",
+    LoadingTitle = "Object Scanner",
+    LoadingSubtitle = "by SigmaTech",
+    Theme = "DarkBlue",
+    ToggleUIKeybind = "K",
+    ConfigurationSaving = {
+        Enabled = false,
+    }
+})
+
+local Tab = Window:CreateTab("Explorer", "folder")
+local Section = Tab:CreateSection("Scan & Dump")
+
+-- ========== Options ==========
+local YIELD_EVERY = 75          -- số lượng node duyệt mỗi lần trước khi nhả CPU
+local STEP_SLEEP  = 0.01        -- thời gian nhả mỗi bước (scan từ từ)
+local LIMIT_PER_SECTION = nil   -- nil = không giới hạn (cẩn thận clipboard). Ví dụ 500 để giới hạn.
+
+-- ========== Heuristic tags ==========
+local KILLER_KEYS = {"killer","killers","slasher","murder","noli","Noli","boss","monster","hunter","entity","entities","Coolkid","coolkid","c00lkid","Coolkidd","JohnDoe","johndoe","John_Doe","john_doe","John_doe",
+"jason","Jason","1x1x1x1","1x4"}
+local SURV_KEYS   = {"survivor","innocent","civilian","player","survivors","shedletsky","Shedletsky","Noob","noob","Guest_1337","Guest1337","guest_1337","guest1337","007n7","OO7n7","Two_time","Twotime","two_time",
+"twotime","Elliot","elliot","Chance","chance","Taph","taph","Builder_Man","builder_man","builderman","BuilderMan","Dusekkar","dusekkar",}
+
+local function tolower(s) return typeof(s)=="string" and s:lower() or s end
+local function hasKeyword(str, list)
+    str = tolower(str or "")
+    for _, k in ipairs(list) do
+        if string.find(str, k, 1, true) then return true end
+    end
+    return false
+end
+
+local function parentHasKeyword(inst, list)
+    local p = inst and inst.Parent
+    while p and p ~= game do
+        if hasKeyword(p.Name, list) then return true end
+        p = p.Parent
+    end
+    return false
+end
+
+local function safeGetChildren(inst)
+    local ok, res = pcall(function() return inst:GetChildren() end)
+    if ok then return res end
+    return {}
+end
+
+local function safeGetFullName(inst)
+    local ok, name = pcall(function() return inst:GetFullName() end)
+    return ok and name or (inst.Name .. " [path-error]")
+end
+
+local function hasHumanoid(model)
+    if not model or not model:IsA("Model") then return false end
+    return model:FindFirstChildOfClass("Humanoid") ~= nil
+end
+
+local function classifyTags(inst)
+    local tags = {}
+
+    -- folder?
+    if inst:IsA("Folder") then table.insert(tags, "folder") end
+
+    -- character-like?
+    if hasHumanoid(inst) and inst:FindFirstChild("HumanoidRootPart") then
+        table.insert(tags, "name.char")
+    end
+
+    -- children count
+    local ch = safeGetChildren(inst)
+    if #ch > 0 then
+        table.insert(tags, ("has-children(%d)"):format(#ch))
+    end
+
+    -- killer/survivor guesses (rất nhẹ, chỉ dựa vào tên & parent)
+    if hasKeyword(inst.Name, KILLER_KEYS) or parentHasKeyword(inst, KILLER_KEYS) then
+        table.insert(tags, "killer object")
+    end
+    if hasKeyword(inst.Name, SURV_KEYS) or parentHasKeyword(inst, SURV_KEYS) then
+        table.insert(tags, "survivor object")
+    end
+
+    return tags
+end
+
+local function tagComment(tags)
+    if #tags == 0 then return "" end
+    return (" -- %s --"):format(table.concat(tags, ", "))
+end
+
+-- ========== Slow Scanner ==========
+local DumpResult = ""
+local PlaceIdStr = ""
+local Totals = {all=0, folders=0, chars=0, objects=0}
+
+local Status = Tab:CreateParagraph({Title = "Status", Content = "idle"})
+local BtnScan
+local BtnCopy
+
+local function slowScan()
+    DumpResult = ""
+    Totals = {all=0, folders=0, chars=0, objects=0}
+
+    local placeId = game.PlaceId
+    PlaceIdStr = tostring(placeId)
+
+    -- BFS queue để quét từ từ
+    local queue = {game}
+    local idx = 1
+
+    -- ba nhóm chính
+    local linesFolders   = {}
+    local linesCharacters= {}
+    local linesObjects   = {}
+
+    local step = 0
+    while idx <= #queue do
+        local inst = queue[idx]
+        idx += 1
+
+        -- lấy children an toàn
+        local children = safeGetChildren(inst)
+        for _, c in ipairs(children) do
+            table.insert(queue, c)
+        end
+
+        -- build 1 dòng thông tin cho instance con (bỏ root 'game' cho đỡ dài)
+        if inst ~= game then
+            local path = safeGetFullName(inst)
+            local cls  = inst.ClassName
+            local tags = classifyTags(inst)
+
+            -- phân loại nhóm
+            if table.find(tags, "folder") then
+                Totals.folders += 1
+                local line = ("%s [%s]%s"):format(path, cls, tagComment(tags))
+                table.insert(linesFolders, line)
+            elseif table.find(tags, "name.char") then
+                Totals.chars += 1
+                local line = ("%s [%s]%s"):format(path, cls, tagComment(tags))
+                table.insert(linesCharacters, line)
+            else
+                Totals.objects += 1
+                local line = ("%s [%s]%s"):format(path, cls, tagComment(tags))
+                table.insert(linesObjects, line)
+            end
+
+            Totals.all += 1
+        end
+
+        -- slow down nhẹ nhàng, không spam
+        step += 1
+        if step % YIELD_EVERY == 0 then
+            task.wait(STEP_SLEEP)
+        end
+    end
