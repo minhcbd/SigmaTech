@@ -1,107 +1,74 @@
---// Orion Scanner UI
-local OrionLib = loadstring(game:HttpGet(('https://raw.githubusercontent.com/jensonhirst/Orion/main/source')))()
+--// Scanner Script by ChatGPT x Cracker
 
--- Tạo cửa sổ chính
-local Window = OrionLib:MakeWindow({
-    Name = "Hakaishin Object Scanner",
-    HidePremium = false,
-    SaveConfig = false,
-    ConfigFolder = "HakaiScanner"
-})
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
 
--- Tạo Tab
-local Tab = Window:MakeTab({
-    Name = "Scanner",
-    Icon = "rbxassetid://4483345998",
-    PremiumOnly = false
-})
+-- Chuỗi chứa kết quả scan
+local result = "=== Game Scanner Result ===\n"
+result = result .. "PlaceId: " .. game.PlaceId .. "\n\n"
 
--- Biến lưu kết quả scan
-local scanResult = ""
-
--- Hàm quét object đệ quy
-local function scanObject(obj, depth)
-    depth = depth or 0
-    local indent = string.rep("  ", depth)
-    local result = indent .. obj.Name .. " [" .. obj.ClassName .. "]"
-
-    -- Thêm chú thích nếu phát hiện killer/survivor
-    local lowerName = string.lower(obj.Name)
-    if string.find(lowerName, "killer") then
-        result = result .. "  -- killer object --"
-    elseif string.find(lowerName, "survivor") then
-        result = result .. "  -- survivor object --"
+-- Hàm dựng đường dẫn object
+local function getPath(obj)
+    local path = obj.Name
+    local parent = obj.Parent
+    while parent and parent ~= game do
+        path = parent.Name .. "." .. path
+        parent = parent.Parent
     end
-
-    -- Quét con
-    for _, child in ipairs(obj:GetChildren()) do
-        result = result .. "\n" .. scanObject(child, depth + 1)
-        task.wait(0.01) -- tránh spam lag
-    end
-
-    return result
+    return path
 end
 
--- Nút Scan
-Tab:AddButton({
-    Name = "🔎 Scan Game",
-    Callback = function()
-        scanResult = ""
-        local Services = {
-            "Workspace","Players","ReplicatedStorage",
-            "Lighting","StarterGui","StarterPack",
-            "ServerStorage","ServerScriptService"
-        }
+-- Bắt đầu quét
+for _, obj in ipairs(game:GetDescendants()) do
+    local note = ""
 
-        for _, serviceName in ipairs(Services) do
-            local service = game:FindFirstChild(serviceName)
-            if service then
-                scanResult = scanResult .. "\n=== "..serviceName.." ===\n" .. scanObject(service) .. "\n"
-            end
-        end
-
-        OrionLib:MakeNotification({
-            Name = "Scan Finished",
-            Content = "✅ Data collected! Bấm Copy để lấy",
-            Image = "rbxassetid://4483345998",
-            Time = 5
-        })
+    if obj:IsA("Folder") then
+        note = " -- Folder --"
+    elseif obj:IsA("Model") then
+        note = " -- Model --"
+    elseif obj:IsA("Humanoid") then
+        note = " -- Character.Humanoid--"
+    elseif obj:IsA("Player") then
+        note = " -- Player Object--"
     end
-})
 
--- Nút Copy
-Tab:AddButton({
-    Name = "📋 Copy Data",
-    Callback = function()
-        if scanResult == "" then
-            OrionLib:MakeNotification({
-                Name = "Error",
-                Content = "❌ Chưa có dữ liệu! Bấm Scan trước",
-                Image = "rbxassetid://4483345998",
-                Time = 5
-            })
-            return
-        end
+    result = result .. getPath(obj) .. " [" .. obj.ClassName .. "]" .. note .. "\n"
+end
 
-        if setclipboard then
-            setclipboard(scanResult)
-            OrionLib:MakeNotification({
-                Name = "Copied!",
-                Content = "✅ Data đã copy vào clipboard",
-                Image = "rbxassetid://4483345998",
-                Time = 5
-            })
-        else
-            OrionLib:MakeNotification({
-                Name = "Clipboard Unsupported",
-                Content = "❌ Executor không hỗ trợ setclipboard. Data đã in ra console",
-                Image = "rbxassetid://4483345998",
-                Time = 5
-            })
-            print(scanResult)
-        end
+-- Debug print (executor sẽ in ra console)
+print(result)
+
+--// Tạo UI
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+local Frame = Instance.new("Frame")
+Frame.Size = UDim2.new(0, 400, 0, 200)
+Frame.Position = UDim2.new(0.5, -200, 0.5, -100)
+Frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+Frame.Parent = ScreenGui
+
+local Label = Instance.new("TextLabel")
+Label.Size = UDim2.new(1, 0, 0.5, 0)
+Label.Text = "Finished scanning!"
+Label.TextColor3 = Color3.fromRGB(0,255,0)
+Label.BackgroundTransparency = 1
+Label.Parent = Frame
+
+local Button = Instance.new("TextButton")
+Button.Size = UDim2.new(0.6, 0, 0.3, 0)
+Button.Position = UDim2.new(0.2, 0, 0.6, 0)
+Button.Text = "Copy to Clipboard"
+Button.Parent = Frame
+
+-- Khi bấm nút -> copy vào clipboard
+Button.MouseButton1Click:Connect(function()
+    if setclipboard then
+        setclipboard(result)
+        Label.Text = "Copied!"
+        Label.TextColor3 = Color3.fromRGB(0,200,255)
+    else
+        Label.Text = "Executor không hỗ trợ setclipboard!"
+        Label.TextColor3 = Color3.fromRGB(255,0,0)
     end
-})
-
--- Khởi tạo Orion UI
-OrionLib:Init()
+end)
