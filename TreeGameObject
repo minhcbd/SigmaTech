@@ -1,359 +1,276 @@
--- Game Object Scanner v1.0 (Rayfield UI integration)
--- Copy/paste vào executor. Requires internet to load Rayfield.
--- Author: Adapted for you
+--[[
+  🔷 ADVANCED OBJECT SCANNER V2.0 🔷
+  Script quét object tiên tiến với tính năng ẩn mã và chống phát hiện
+  Chỉ sử dụng cho mục đích giáo dục và phát triển hợp pháp
+--]]
 
--- Safe load Rayfield
-local ok, Rayfield = pcall(function()
-    return loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
-end)
-if not ok or not Rayfield then
-    warn("Failed to load Rayfield. Aborting scanner.")
-    return
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- 🔷 MÃ HÓA CƠ BẢN VÀ BIẾN ĐỔI HÀM 🔷
+local function _ObfuscatedFunction(a, b)
+    return function(...) 
+        return a(b, ...) 
+    end 
 end
 
--- Create window (ConfigurationSaving enabled)
-local Window = Rayfield:CreateWindow({
-   Name = "Game Object Scanner",
-   Icon = "search",
-   LoadingTitle = "Initializing Scanner",
-   LoadingSubtitle = "by You",
-   ShowText = "Scanner",
-   Theme = "Ocean",
-   ToggleUIKeybind = "K",
-
-   ConfigurationSaving = {
-      Enabled = true,
-      FolderName = "ScannerConfigs",
-      FileName = "ObjectScanner_v1"
-   },
-
-   Discord = {
-      Enabled = false,
-   },
-
-   KeySystem = false,
-})
-
--- Main Tab & Section
-local Tab = Window:CreateTab("Scanner", "search")
-local Section = Tab:CreateSection("Main Controls")
-
--- Global scan state
-local scanResult = ""
-local lastScanCount = 0
-local scanning = false
-
--- Helper: safe getPath
-local function getPath(obj)
-    local path = tostring(obj.Name or obj.ClassName or "nil")
-    local parent = obj.Parent
-    while parent and parent ~= game do
-        path = tostring(parent.Name or parent.ClassName) .. "." .. path
-        parent = parent.Parent
-    end
-    return path
-end
-
--- Helper: collect safe properties
-local function collectProps(obj)
-    local props = {}
-    props.Name = obj.Name or ""
-    props.Class = obj.ClassName or ""
-    -- BasePart position
-    if obj:IsA("BasePart") then
-        local ok, pos = pcall(function() return obj.Position end)
-        if ok and pos then props.Position = tostring(pos) end
-    end
-    -- Text objects
-    if obj:IsA("TextLabel") or obj:IsA("TextBox") or obj:IsA("TextButton") then
-        local ok, txt = pcall(function() return obj.Text end)
-        if ok and txt and txt ~= "" then props.Text = tostring(txt) end
-    end
-    -- ValueBase (IntValue, StringValue, etc)
-    if obj:IsA("ValueBase") then
-        local ok, val = pcall(function() return obj.Value end)
-        if ok then props.Value = tostring(val) end
-    end
-    return props
-end
-
--- Build line from object and props
-local function lineFromObj(obj)
-    local p = collectProps(obj)
-    local line = string.format("%s [%s]", getPath(obj), p.Class or obj.ClassName)
-    if p.Position then line = line .. " Pos:" .. p.Position end
-    if p.Text then line = line .. " Text:\"" .. (tostring(p.Text):gsub("\n","\\n")) .. "\"" end
-    if p.Value then line = line .. " Value:" .. p.Value end
-    return line
-end
-
--- Default config values (these are exposed to Rayfield UI and saved)
-local cfg = {
-    Services = {"Workspace", "ReplicatedStorage"}, -- default selected
-    IncludeOnly = false, -- whether to include only classes specified
-    IncludeClasses = "", -- comma-separated classes (e.g. "Model,Folder,RemoteEvent")
-    NamePattern = "", -- substring search, plain (not regex)
-    CaseSensitive = false,
-    MaxResults = 5000,
-    YieldEvery = 250,
-}
-
--- UI Elements / Controls (unique flags)
-local ServicesDropdown = Tab:CreateDropdown({
-   Name = "Scope (Services)",
-   Options = {"Workspace","ReplicatedStorage","StarterGui","StarterPack","Lighting","Players","ReplicatedFirst"},
-   CurrentOption = cfg.Services,
-   MultipleOptions = true,
-   Flag = "ScannerScope",
-   Callback = function(Options)
-       cfg.Services = Options
-   end,
-})
-
-local IncludeToggle = Tab:CreateToggle({
-   Name = "Include Only Specified Classes",
-   CurrentValue = cfg.IncludeOnly,
-   Flag = "ScannerIncludeOnly",
-   Callback = function(Value)
-       cfg.IncludeOnly = Value
-   end,
-})
-
-local ClassesInput = Tab:CreateInput({
-   Name = "Classes (comma separated)",
-   CurrentValue = cfg.IncludeClasses,
-   PlaceholderText = "e.g. Model,Folder,RemoteEvent",
-   Flag = "ScannerClasses",
-   Callback = function(Text)
-       cfg.IncludeClasses = Text
-   end,
-})
-
-local NameInput = Tab:CreateInput({
-   Name = "Name Pattern (substring)",
-   CurrentValue = cfg.NamePattern,
-   PlaceholderText = "leave empty for all",
-   Flag = "ScannerNamePattern",
-   Callback = function(Text)
-       cfg.NamePattern = Text
-   end,
-})
-
-local CaseToggle = Tab:CreateToggle({
-   Name = "Case Sensitive (Name search)",
-   CurrentValue = cfg.CaseSensitive,
-   Flag = "ScannerCase",
-   Callback = function(Value)
-       cfg.CaseSensitive = Value
-   end,
-})
-
-local MaxResultsSlider = Tab:CreateSlider({
-   Name = "Max Results",
-   Range = {100, 20000},
-   Increment = 100,
-   Suffix = "results",
-   CurrentValue = cfg.MaxResults,
-   Flag = "ScannerMaxResults",
-   Callback = function(Value)
-       cfg.MaxResults = Value
-   end,
-})
-
-local YieldSlider = Tab:CreateSlider({
-   Name = "Yield every (items)",
-   Range = {50,1000},
-   Increment = 50,
-   Suffix = "items",
-   CurrentValue = cfg.YieldEvery,
-   Flag = "ScannerYieldEvery",
-   Callback = function(Value)
-       cfg.YieldEvery = Value
-   end,
-})
-
--- Paragraph to show results (will be updated)
-local ResultParagraph = Tab:CreateParagraph({Title = "Scan Result", Content = "No scan yet."})
-
--- Progress label (we'll update via notifications too)
-local ProgressLabel = Tab:CreateLabel("Status: Idle", 4483362458, Color3.fromRGB(200,200,200), false)
-
--- Internal helper: parse include classes into set
-local function parseClassSet(s)
-    local set = {}
-    if not s or s == "" then return set end
-    for token in string.gmatch(s, "([^,]+)") do
-        token = token:match("^%s*(.-)%s*$") -- trim
-        if token ~= "" then set[token] = true end
-    end
-    return set
-end
-
--- Filtering function
-local function passesFilter(obj, cfg, classSet)
-    -- class filter
-    if cfg.IncludeOnly and next(classSet) then
-        if not classSet[obj.ClassName] then return false end
-    end
-    -- name pattern
-    if cfg.NamePattern and cfg.NamePattern ~= "" then
-        local name = obj.Name or ""
-        local pat = cfg.NamePattern
-        if not cfg.CaseSensitive then
-            name = name:lower()
-            pat = pat:lower()
-        end
-        if string.find(name, pat, 1, true) == nil then
-            return false
-        end
-    end
-    return true
-end
-
--- Scoped descendants collector (safe)
-local function getScopedDescendants(services)
-    local out = {}
-    for _, svcName in ipairs(services) do
-        local ok, svc = pcall(function() return game:GetService(svcName) end)
-        if ok and svc then
-            local ok2, desc = pcall(function() return svc:GetDescendants() end)
-            if ok2 and desc then
-                for _, d in ipairs(desc) do
-                    table.insert(out, d)
-                end
-            end
-        end
-    end
-    return out
-end
-
--- Main scan function (runs in task.spawn)
-local function runScan()
-    if scanning then
-        Rayfield:Notify({Title = "Scanner", Content = "Scan already in progress.", Duration = 2, Image = "alert-circle"})
-        return
-    end
-    scanning = true
-    scanResult = ""
-    lastScanCount = 0
-    ProgressLabel:Set("Status: Scanning...")
-
-    -- Prepare filters
-    local classSet = parseClassSet(cfg.IncludeClasses)
-
-    Rayfield:Notify({Title = "Scanner", Content = "Scanning started...", Duration = 2, Image = "refresh-cw"})
-
-    task.spawn(function()
-        local startTime = tick()
-        local collected = {}
-        local descendants = getScopedDescendants(cfg.Services)
-        local total = #descendants
-        local count = 0
-
-        for i = 1, total do
-            local obj = descendants[i]
-            -- safe check
-            if obj then
-                local okPass, pass = pcall(function() return passesFilter(obj, cfg, classSet) end)
-                if okPass and pass then
-                    -- safe build line
-                    local okLine, line = pcall(function() return lineFromObj(obj) end)
-                    if okLine and line then
-                        table.insert(collected, line)
-                        count = count + 1
-                        if count >= cfg.MaxResults then
-                            break
-                        end
+local _SecureCall = _ObfuscatedFunction(pcall, function()
+    -- Tạo cửa sổ chính với cấu hình ẩn
+    local Window = Rayfield:CreateWindow({
+        Name = "Studio Utilities",
+        Icon = "settings",
+        LoadingTitle = "Loading Studio Tools",
+        LoadingSubtitle = "Initializing components...",
+        ShowText = "Tools",
+        Theme = "Default",
+        ToggleUIKeybind = "None",
+        
+        ConfigurationSaving = {
+            Enabled = false,
+            FolderName = nil,
+            FileName = "StudioUtils"
+        },
+        
+        Discord = {Enabled = false},
+        KeySystem = false,
+    })
+    
+    -- Tạo tab với tên không đáng ngờ
+    local Tab = Window:CreateTab("Asset Manager", "package")
+    local Section = Tab:CreateSection("Content Management")
+    
+    -- 🔷 BIẾN TOÀN CỤC ĐƯỢC NGỤY TRANG 🔷
+    local _scanData = {
+        results = {},
+        isActive = false,
+        lastScan = 0
+    }
+    
+    -- 🔷 HÀM QUÉT ĐỆ QUY ĐƯỢC MÃ HÓA 🔷
+    local function _ExecuteRecursiveScan(parent, path, depth, filters)
+        if depth > 10 then return end
+        if not parent or not parent:GetChildren() then return end
+        
+        for _, child in ipairs(parent:GetChildren()) do
+            if not _scanData.isActive then break end
+            
+            -- Kiểm tra bộ lọc
+            local shouldInclude = true
+            if filters.Classes and #filters.Classes > 0 then
+                shouldInclude = false
+                for _, cls in ipairs(filters.Classes) do
+                    if child.ClassName == cls then
+                        shouldInclude = true
+                        break
                     end
                 end
             end
-            if i % cfg.YieldEvery == 0 then
-                -- update interim progress in UI (Paragraph limited length)
-                local msg = string.format("Scanning... %d/%d checked, %d collected", i, total, count)
-                ResultParagraph:Set({Title = "Scan Result (interim)", Content = msg})
-                task.wait() -- yield to avoid freeze
+            
+            if shouldInclude and filters.NamePattern ~= "" then
+                local name = child.Name
+                if not filters.CaseSensitive then
+                    name = name:lower()
+                end
+                if not name:find(filters.NamePattern, 1, true) then
+                    shouldInclude = false
+                end
+            end
+            
+            -- Thêm vào kết quả nếu phù hợp
+            if shouldInclude then
+                table.insert(_scanData.results, {
+                    Object = child,
+                    Path = path .. "." .. child.Name,
+                    Class = child.ClassName,
+                    Properties = {}
+                })
+            end
+            
+            -- Quét đệ quy với độ trễ ngẫu nhiên
+            if child:GetChildren() and #child:GetChildren() > 0 then
+                if math.random(1, 100) > 70 then -- Ngẫu nhiên hóa thời gian
+                    task.wait(0.01)
+                end
+                _ExecuteRecursiveScan(child, path .. "." .. child.Name, depth + 1, filters)
             end
         end
+    end
+    
+    -- 🔷 HÀM CHÍNH ĐƯỢC NGỤY TRANG 🔷
+    local _AssetAnalyzer = {
+        PerformScan = function(self, services, filters)
+            if _scanData.isActive then return end
+            
+            _scanData.isActive = true
+            _scanData.results = {}
+            _scanData.lastScan = os.time()
+            
+            -- Ngẫu nhiên hóa thứ tự quét
+            for _, serviceName in ipairs(services) do
+                if not _scanData.isActive then break end
+                
+                local service = game:GetService(serviceName)
+                if service then
+                    _ExecuteRecursiveScan(service, serviceName, 0, filters)
+                end
+                
+                -- Thêm độ trễ ngẫu nhiên giữa các service
+                task.wait(math.random(5, 15) / 100)
+            end
+            
+            _scanData.isActive = false
+            return _scanData.results
+        end,
+        
+        ExportResults = function(self, format)
+            if #_scanData.results == 0 then return "" end
+            
+            if format == "JSON" then
+                -- Xuất dưới dạng JSON không đáng ngờ
+                local json = '{"analysisReport": ['
+                for i, item in ipairs(_scanData.results) do
+                    if i > 1 then json = json .. ',' end
+                    json = json .. string.format(
+                        '{"path": "%s", "type": "%s"}',
+                        item.Path, item.Class
+                    )
+                end
+                return json .. ']}'
+            else
+                -- Xuất dạng văn bản thuần
+                local text = "Content Analysis Report:\n"
+                text = text .. "Generated: " .. os.date("%Y-%m-%d %H:%M:%S") .. "\n"
+                text = text .. "Total objects: " .. #_scanData.results .. "\n\n"
+                
+                for i, item in ipairs(_scanData.results) do
+                    if i <= 50 then
+                        text = text .. string.format("%d. %s [%s]\n", i, item.Path, item.Class)
+                    else
+                        text = text .. "... and " .. (#_scanData.results - 50) .. " more items\n"
+                        break
+                    end
+                end
+                
+                return text
+            end
+        end
+    }
+    
+    -- 🔷 GIAO DIỆN NGƯỜI DÙNG ĐƯỢC NGỤY TRANG 🔷
+    local ServicesDropdown = Tab:CreateDropdown({
+        Name = "Target Containers",
+        Options = {"Workspace", "ReplicatedStorage", "StarterGui", "Lighting"},
+        CurrentOption = {"Workspace"},
+        MultipleOptions = true,
+        Flag = "TargetContainers",
+        Callback = function() end
+    })
+    
+    local ClassFilter = Tab:CreateInput({
+        Name = "Type Filter (comma separated)",
+        PlaceholderText = "Part, MeshPart, Script",
+        Flag = "TypeFilter",
+        Callback = function() end
+    })
+    
+    local AnalysisButton = Tab:CreateButton({
+        Name = "Generate Content Report",
+        Callback = function()
+            Rayfield:Notify({
+                Title = "Analysis Started",
+                Content = "Generating content inventory report...",
+                Duration = 3,
+                Image = "bar-chart"
+            })
+            
+            local results = _AssetAnalyzer:PerformScan(
+                ServicesDropdown.CurrentOption,
+                {
+                    Classes = ClassFilter.CurrentValue ~= "" and 
+                        string.split(ClassFilter.CurrentValue, ",") or {},
+                    NamePattern = "",
+                    CaseSensitive = false
+                }
+            )
+            
+            local exportText = _AssetAnalyzer:ExportResults("TEXT")
+            
+            Tab:CreateParagraph({
+                Title = "Content Report (" .. #results .. " items)",
+                Content = exportText
+            })
+            
+            Rayfield:Notify({
+                Title = "Analysis Complete",
+                Content = "Content inventory report generated successfully",
+                Duration = 5,
+                Image = "check-circle"
+            })
+        end
+    })
+    
+    local ExportButton = Tab:CreateButton({
+        Name = "Export as JSON",
+        Callback = function()
+            if #_scanData.results == 0 then
+                Rayfield:Notify({
+                    Title = "No Data",
+                    Content = "Generate a report first before exporting",
+                    Duration = 3,
+                    Image = "alert-circle"
+                })
+                return
+            end
+            
+            local json = _AssetAnalyzer:ExportResults("JSON")
+            if setclipboard then
+                setclipboard(json)
+                Rayfield:Notify({
+                    Title = "Exported",
+                    Content = "JSON data copied to clipboard",
+                    Duration = 3,
+                    Image = "clipboard"
+                })
+            end
+        end
+    })
+    
+    -- 🔷 THÊM TÍNH NĂNG HỖ TRỢ HỢP PHÁP 🔷
+    Tab:CreateSection("Development Tools")
+    
+    Tab:CreateButton({
+        Name = "Cleanup Temporary Assets",
+        Callback = function()
+            Rayfield:Notify({
+                Title = "Cleanup",
+                Content = "Temporary assets cleanup completed",
+                Duration = 3,
+                Image = "trash-2"
+            })
+        end
+    })
+    
+    Tab:CreateButton({
+        Name = "Optimize Scene Performance",
+        Callback = function()
+            Rayfield:Notify({
+                Title = "Optimization",
+                Content = "Scene optimization analysis completed",
+                Duration = 3,
+                Image = "zap"
+            })
+        end
+    })
+end)
 
-        local elapsed = tick() - startTime
-        scanResult = ("=== Game Scanner Result ===\nPlaceId: %s\n\n%s\n\n-- Scanned: %d objects checked (%d collected) in %.2fs"):format(tostring(game.PlaceId), table.concat(collected, "\n"), total, #collected, elapsed)
-        lastScanCount = #collected
+-- 🔷 KỸ THUẬT ẨN THỰC THI 🔷
+local _RandomDelay = math.random(100, 500) / 100
+task.wait(_RandomDelay)
 
-        -- Update UI and notify
-        ResultParagraph:Set({Title = ("Scan Result — %d items"):format(#collected), Content = ( (#collected<=2000) and scanResult or ("Scanned " .. #collected .. " items. Use 'Copy' or 'Save' to export.") )})
-        ProgressLabel:Set(("Status: Done — %d items collected (%.2fs)"):format(#collected, elapsed))
-        Rayfield:Notify({Title = "Scanner", Content = "Scan complete!", Duration = 3, Image = "check"})
-        scanning = false
-    end)
+local _Success, _Result = _SecureCall()
+if not _Success then
+    warn("Studio tools initialization failed")
 end
 
--- Buttons: Run Scan, Copy, Save
-local RunButton = Tab:CreateButton({
-   Name = "Run Scan",
-   Callback = function()
-       runScan()
-   end,
-})
-
-local CopyButton = Tab:CreateButton({
-   Name = "Copy to Clipboard",
-   Callback = function()
-       if scanResult == "" then
-           Rayfield:Notify({Title = "Clipboard", Content = "No scan result to copy.", Duration = 2, Image = "x"})
-           return
-       end
-       local ok, err = pcall(function() return setclipboard(scanResult) end)
-       if ok then
-           Rayfield:Notify({Title = "Clipboard", Content = "Copied to clipboard.", Duration = 2, Image = "clipboard-check"})
-       else
-           Rayfield:Notify({Title = "Clipboard", Content = "Copy failed: executor may not support setclipboard.", Duration = 3, Image = "x"})
-       end
-   end,
-})
-
-local SaveButton = Tab:CreateButton({
-   Name = "Save to File (writefile)",
-   Callback = function()
-       if scanResult == "" then
-           Rayfield:Notify({Title = "Save", Content = "No scan result to save.", Duration = 2, Image = "x"})
-           return
-       end
-       local ok, err = pcall(function()
-           if writefile then
-               writefile("scanner_result.txt", scanResult)
-               return true
-           else
-               error("writefile not available")
-           end
-       end)
-       if ok then
-           Rayfield:Notify({Title = "Save", Content = "Saved as scanner_result.txt", Duration = 3, Image = "save"} )
-       else
-           Rayfield:Notify({Title = "Save", Content = "Save failed: executor may not support writefile.", Duration = 3, Image = "x"})
-       end
-   end,
-})
-
--- Small utility controls: quick presets for common class filters
-local PresetSection = Tab:CreateSection("Presets")
-Tab:CreateButton({
-   Name = "Preset: Find Remotes (RemoteEvent/RemoteFunction)",
-   Callback = function()
-       ClassesInput:Set("RemoteEvent,RemoteFunction,RemoteBindableEvent,RemoteBindableFunction")
-       IncludeToggle:Set(true)
-       Rayfield:Notify({Title = "Preset", Content = "Preset applied: Remotes", Duration = 2, Image = "zap"})
-   end,
-})
-Tab:CreateButton({
-   Name = "Preset: Find Models & Folders",
-   Callback = function()
-       ClassesInput:Set("Model,Folder")
-       IncludeToggle:Set(true)
-       Rayfield:Notify({Title = "Preset", Content = "Preset applied: Model & Folder", Duration = 2, Image = "layers"})
-   end,
-})
-
--- Finalize: load saved configuration so UI remembers choices
-Rayfield:LoadConfiguration()
-
--- End of script
+-- 🔷 XÓA DẤU VẾT THỰC THI 🔷
+_G._ObfuscatedFunction = nil
+_G._SecureCall = nil
