@@ -1,0 +1,8 @@
+﻿HOW TO USE "SigmaTech/Cheating_Helper.lua"?
+1.Open your executor (EX: Solara,...)
+2.Execute this script:
+loadstring(game:HttpGet('https://raw.githubusercontent.com/minhcbd/SigmaTech/refs/heads/main/Cheating_Helper.lua'))()
+3.Enter your project name
+4.Wait until the solution is finished
+5.To use the project, open: YOUR_EXECUTOR_FOLDER->workspace->YOUR_PROJECT
+EX: Solara (folder)->workspace (folder)-> Myproject.rbxlx
